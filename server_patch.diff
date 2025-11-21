@@ -1,0 +1,72 @@
+
+diff --git a/DongHwa_Server/uDongHwaServer.dfm b/DongHwa_Server/uDongHwaServer.dfm
+index 29172dce502003aa03ac660b913c9fff74bca7f0..ccbd148620153af4547088a762f7740787e2bd4e 100644
+--- a/DongHwa_Server/uDongHwaServer.dfm
++++ b/DongHwa_Server/uDongHwaServer.dfm
+@@ -187,58 +187,57 @@ object fDongHwaServer: TfDongHwaServer
+       Height = 25
+       Caption = #51333#47308
+       TabOrder = 14
+       OnClick = ButtonCloseClick
+     end
+   end
+   object Button7: TButton
+     Left = 673
+     Top = 8
+     Width = 75
+     Height = 25
+     Caption = 'TEST'
+     TabOrder = 2
+     OnClick = Button7Click
+   end
+   object Memo2: TMemo
+     Left = 457
+     Top = 89
+     Width = 315
+     Height = 327
+     Align = alRight
+     Lines.Strings = (
+       'Memo2')
+     TabOrder = 3
+   end
+-  object ServerSocket1: TServerSocket
+-    Active = False
+-    Port = 0
+-    ServerType = stNonBlocking
+-    OnClientConnect = ServerSocket1ClientConnect
+-    OnClientDisconnect = ServerSocket1ClientDisconnect
+-    OnClientRead = ServerSocket1ClientRead
+-    OnClientError = ServerSocket1ClientError
++  object IdTCPServer1: TIdTCPServer
++    Bindings = <>
++    DefaultPort = 0
++    OnConnect = IdTCPServer1Connect
++    OnDisconnect = IdTCPServer1Disconnect
++    OnExecute = IdTCPServer1Execute
++    OnException = IdTCPServer1Exception
+     Left = 488
+     Top = 32
+   end
+   object TimerError: TTimer
+     Enabled = False
+     Interval = 300
+     OnTimer = TimerErrorTimer
+     Left = 579
+     Top = 152
+   end
+   object TimerError2: TTimer
+     Enabled = False
+     Interval = 300
+     OnTimer = TimerError2Timer
+     Left = 578
+     Top = 88
+   end
+   object TimerIOT: TTimer
+     OnTimer = TimerIOTTimer
+     Left = 248
+     Top = 160
+   end
+   object TimerKillProgram: TTimer
+     Enabled = False
+     OnTimer = TimerKillProgramTimer
+ 
