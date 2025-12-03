@@ -235,7 +235,6 @@ object fDongHwaServer: TfDongHwaServer
     Top = 88
   end
   object TimerIOT: TTimer
-    Interval = 3000
     OnTimer = TimerIOTTimer
     Left = 248
     Top = 160

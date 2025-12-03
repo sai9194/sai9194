@@ -1,4 +1,3 @@
-
 diff --git a/DongHwa_Server/uDongHwaServer.dfm b/DongHwa_Server/uDongHwaServer.dfm
 index 29172dce502003aa03ac660b913c9fff74bca7f0..ccbd148620153af4547088a762f7740787e2bd4e 100644
 --- a/DongHwa_Server/uDongHwaServer.dfm
@@ -69,4 +68,3 @@ index 29172dce502003aa03ac660b913c9fff74bca7f0..ccbd148620153af4547088a762f77407
    object TimerKillProgram: TTimer
      Enabled = False
      OnTimer = TimerKillProgramTimer
- 

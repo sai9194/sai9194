@@ -2,7 +2,7 @@ unit uDongHwaServer;
 
 interface
 
-uses                         TlHelp32,      System.IOUtils,    ClipBrd, SmartStockService,
+uses                         TlHelp32,      System.IOUtils,    ClipBrd, SmartStockService,  DateUtils,
   Winapi.Windows, Winapi.Messages, System.SysUtils, System.Variants, System.Classes, Vcl.Graphics,
   Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, System.Win.ScktComp, ActiveX,Xml.Win.msxmldom,
   Vcl.ExtCtrls, FireDAC.Stan.Intf, FireDAC.Stan.Option, FireDAC.Stan.Param,  Xml.XMLDoc, Xml.XMLIntf,
@@ -83,6 +83,7 @@ type
     procedure Timer_checkTimer(Sender: TObject);
   private
     { Private declarations }
+    procedure ClearSocketData(Index: Integer);
   public
     { Public declarations }
     function HexToInt(sHex:String):Integer;
@@ -97,7 +98,7 @@ type
 
 var
   fDongHwaServer: TfDongHwaServer;
-  SerialNo, PreTemp, PreSet : Array[0..5000] of String;
+  SerialNo, PreTemp, PreSet : Array[0..10000] of String;
   SerialCount : Array[0..10000] of Integer;
   ConnectCount : Integer;
   IOTCommand : Array[0..10000] of Boolean;
@@ -107,12 +108,37 @@ var
 
   IOTTimerNumber : Integer;
   SocketReadNumber : Integer;
-  HitCS: TCriticalSection;
-  LastTs: TDictionary<string, UInt64>;
+  FLastLabelUpdate : TDateTime;
+  SerialHandles : Array[0..10000] of THandle;
 
 implementation
 
 {$R *.dfm}
+
+// 유령세션 초기화 251203 추가
+procedure TfDongHwaServer.ClearSocketData(Index: Integer);
+begin
+  if (Index < 0) or (Index > High(SerialNo)) then Exit;
+
+  // 식별자 / 핸들
+  SerialNo[Index]      := '';
+  SerialHandles[Index] := 0;
+
+  // 상태값
+  SerialCount[Index] := 77;   // 초기값 유지
+  PreTemp[Index]     := '';
+  PreSet[Index]      := '';
+
+  // IOT 관련
+  IOTCommand[Index] := False;
+  IOTNo[Index]      := '';
+
+  // UI / 임시값
+  EditFloat[Index] := '';
+  EditOnOff[Index] := '';
+  EditHex[Index]   := '';
+end;
+
 
 function TfDongHwaServer.BccCalculator(HexString: String; BCCNum: Integer): Integer;
 var
@@ -318,15 +344,16 @@ begin
   Button1.Click;
   ConnectCount := 0;
   IOTTimerNumber := 0;
-  for i := 0 to 500 do
+  for i := 0 to HIGH(SerialNo) do //10000 do
   begin
     SerialCount[i] := 77;
     SerialNo[i] := '';
-  end;
-  for i := 0 to 1000 do
-  begin
     IOTCommand[i] := False;
   end;
+//  for i := 0 to 10000 do
+//  begin
+//    IOTCommand[i] := False;
+//  end;
 
 end;
 
@@ -437,10 +464,21 @@ procedure TfDongHwaServer.ServerSocket1ClientDisconnect(Sender: TObject;
   Socket: TCustomWinSocket);
 var
   S : string;
+  i : integer;
 begin
   S := Socket.RemoteHost + ':' + Socket.RemoteAddress + 'DisConnected'
        +FormatDateTime('yyyy-mm-dd hh:nn:ss',Now);
   LogAdd(S);
+
+  for i := 0 to High(SerialNo) do
+  begin
+    // 저장해둔 핸들과 지금 나가는 소켓의 핸들이 같으면
+    if SerialHandles[i] = Socket.Handle then
+    begin
+      ClearSocketData(i); // 초기화
+      Break;
+    end;
+  end;
 end;
 
 procedure TfDongHwaServer.ServerSocket1ClientError(Sender: TObject;
@@ -454,12 +492,11 @@ procedure TfDongHwaServer.ServerSocket1ClientRead(Sender: TObject;
   Socket: TCustomWinSocket);
 var
   BCC : Integer;
-  StateStr : String;
+  StateStr, errck : String;
   i : Integer;
   Receive_data     : string;
   receive_count    : integer;
   ReceiveBuffer	   : array[0..1000] of Char;
-  MyThread00 : TThread;
   TempData : String;
   ConnectSerialNo : Integer;
   sCommand: AnsiString;
@@ -467,310 +504,383 @@ var
   PowerState, DefrostMode, DefrostState,
   DIn1, DIn2, DIn3, DIn4, DIn5, DOut1, DOut2, DOut3, DOut4, DOut5 : Boolean;
   Err : String;
-  procedure Wait(Number: Integer; Proc: TProc);
-  var
-    Thread: array[0..100] of TThread;
-  begin
-    if PGCloseFlag then Exit;
-
-    Thread[Number] := TThread.CreateAnonymousThread(
-      procedure()
-      begin
-        Proc;
-      end);
-    Thread[Number].FreeOnTerminate := True;
-    Thread[Number].Start;
-
-    while not Thread[Number].Finished do Application.ProcessMessages;
-  end;
+//  procedure Wait(Number: Integer; Proc: TProc);
+//  var
+//    Thread: array[0..100] of TThread;
+//  begin
+//    if PGCloseFlag then Exit;
+//
+//    Thread[Number] := TThread.CreateAnonymousThread(
+//      procedure()
+//      begin
+//        Proc;
+//      end);
+//    Thread[Number].FreeOnTerminate := True;
+//    Thread[Number].Start;
+//
+//    while not Thread[Number].Finished do Application.ProcessMessages;
+//  end;
 begin
+    // 소켓 유효성 체크 추가
+  if not Assigned(Socket) or not Socket.Connected then Exit;
+
   try
     FillChar(ReceiveBuffer,1000,#0);
     receive_count := Socket.ReceiveBuf(ReceiveBuffer,1000);
     Receive_data := '';
+    errck :=  'Receive_data_';
 
     if(receive_count > 0)then
     begin
-      for i := 0 to 14 do begin
+      errck :=  'if(receive_count > 0)then_';
+      for i := 0 to 14 do
+      begin
         TempData := inttohex(integer(ReceiveBuffer[i]),4);
+        errck :=  'TempData := _'+i.ToString;
         Receive_data := Receive_data + Copy(TempData,3,2) + Copy(TempData,1,2);
+        errck :=  'Receive_data := _'+i.ToString;
       end;
-
-       //if not AllowEvery10s(Copy(Receive_data,7,24)) then Exit; // 타이머 251014 김동휘 추가
 
       if Copy(Receive_data,1,6) = '021A10' then
       begin
-          //Memo1.Lines.Add('ID : '+Copy(Receive_data,7,24));
-          StateStr := Dec2Bin(HexToInt(Copy(Receive_data,31,2)));
-
-          Err := Copy(StateStr,2,3);
+         errck :=  ' if Copy(Receive_data,1,6) = 021A10 then_';
+        //Memo1.Lines.Add('ID : '+Copy(Receive_data,7,24));
+        StateStr := Dec2Bin(HexToInt(Copy(Receive_data,31,2)));
+        errck :=  ' StateStr := Dec2Bin(HexToInt(Copy(Receive_data,31,2)))' + vartostr(Dec2Bin(HexToInt(Copy(Receive_data,31,2))));
+        Err := Copy(StateStr,2,3);
 //          //Memo1.Lines.Add('예비321 : '+Copy(StateStr,5,3));
 
-          if Copy(StateStr,6,1) = '0' then DefrostMode := False else DefrostMode := True;    // 제상모드
-          if Copy(StateStr,7,1) = '0' then DefrostState := False else DefrostState := True;  // 제상동작
+        if Copy(StateStr,6,1) = '0' then DefrostMode := False else DefrostMode := True;    // 제상모드
+        if Copy(StateStr,7,1) = '0' then DefrostState := False else DefrostState := True;  // 제상동작
+        errck :=  '제상_';
 //          //Memo1.Lines.Add('전원OnOff : '+Copy(StateStr,8,1));
-          if Copy(StateStr,8,1) = '0' then PowerState := False else PowerState := True;
+        if Copy(StateStr,8,1) = '0' then PowerState := False else PowerState := True;
+         errck :=  'PowerState_';
 
-
-          StateStr := Dec2Bin(HexToInt(Copy(Receive_data,53,2)));
+        StateStr := Dec2Bin(HexToInt(Copy(Receive_data,53,2)));
+        errck :=  ' StateStr := Dec2Bin(HexToInt(Copy(Receive_data,53,2)))' + vartostr(Dec2Bin(HexToInt(Copy(Receive_data,53,2))));
 //          //Memo1.Lines.Add('DI : '+Copy(StateStr,1,8));
-          if Copy(StateStr,8,1) = '1' then DIn1 := True else DIn1 := False;
-          if Copy(StateStr,7,1) = '1' then DIn2 := True else DIn2 := False;
-          if Copy(StateStr,6,1) = '1' then DIn3 := True else DIn3 := False;
-          if Copy(StateStr,5,1) = '1' then DIn4 := True else DIn4 := False;
-          if Copy(StateStr,4,1) = '1' then DIn5 := True else DIn5 := False;
+        if Copy(StateStr,8,1) = '1' then DIn1 := True else DIn1 := False;
+        errck :=  ' Copy(StateStr,8,1)_in';
+        if Copy(StateStr,7,1) = '1' then DIn2 := True else DIn2 := False;
+        errck :=  ' Copy(StateStr,7,1)_in';
+        if Copy(StateStr,6,1) = '1' then DIn3 := True else DIn3 := False;
+        errck :=  ' Copy(StateStr,6,1)_in';
+        if Copy(StateStr,5,1) = '1' then DIn4 := True else DIn4 := False;
+        errck :=  ' Copy(StateStr,5,1)_in';
+        if Copy(StateStr,4,1) = '1' then DIn5 := True else DIn5 := False;
+        errck :=  ' Copy(StateStr,4,1)_in';
 
-          StateStr := Dec2Bin(HexToInt(Copy(Receive_data,55,2)));
+        StateStr := Dec2Bin(HexToInt(Copy(Receive_data,55,2)));
+        errck :=  ' StateStr := Dec2Bin(HexToInt(Copy(Receive_data,55,2)))' + vartostr(Dec2Bin(HexToInt(Copy(Receive_data,55,2))));
 //          //Memo1.Lines.Add('DO : '+Copy(StateStr,1,8));
-          if Copy(StateStr,8,1) = '1' then DOut1 := True else DOut1 := False;
-          if Copy(StateStr,7,1) = '1' then DOut2 := True else DOut2 := False;
-          if Copy(StateStr,6,1) = '1' then DOut3 := True else DOut3 := False;
-          if Copy(StateStr,5,1) = '1' then DOut4 := True else DOut4 := False;
-          if Copy(StateStr,4,1) = '1' then DOut5 := True else DOut5 := False;
+        if Copy(StateStr,8,1) = '1' then DOut1 := True else DOut1 := False;
+        errck :=  ' Copy(StateStr,8,1)_out';
+        if Copy(StateStr,7,1) = '1' then DOut2 := True else DOut2 := False;
+        errck :=  ' Copy(StateStr,7,1)_out';
+        if Copy(StateStr,6,1) = '1' then DOut3 := True else DOut3 := False;
+        errck :=  ' Copy(StateStr,6,1)_out';
+        if Copy(StateStr,5,1) = '1' then DOut4 := True else DOut4 := False;
+        errck :=  ' Copy(StateStr,5,1)_out';
+        if Copy(StateStr,4,1) = '1' then DOut5 := True else DOut5 := False;
+        errck :=  ' Copy(StateStr,4,1)_out';
 
-          sCommand := '';
-          TempStr := Copy(Receive_data,3,56);
-          BCC := StrToInt('0x'+Copy(TempStr,1,2));
-          for i := 1 to (Length(TempStr) div 2) do
+        sCommand := '';
+        TempStr := Copy(Receive_data,3,56);
+        errck :=  ' TempStr := ';
+        BCC := StrToInt('0x'+Copy(TempStr,1,2));
+        errck :=  ' BCC := ';
+        for i := 1 to (Length(TempStr) div 2) do
+        begin
+          errck :=  '  for i := 1 to (Length(TempStr) div 2) do '+ i.ToString;
+          sCommand := sCommand + AnsiChar(Chr(StrToInt('0x'+Copy(TempStr,(i*2)-1,2))));
+           errck :=  '   sCommand := '+ i.ToString;
+          if i <> 1 then  BCC := BCC xor StrToInt('0x'+Copy(TempStr,(i*2)-1,2));
+          errck :=  ' if i <> 1 then '+ i.ToString;
+        end;
+
+
+        if Copy(Receive_data,59,2) = IntToHex(BCC,2) then
+        begin
+          errck :=  ' if Copy(Receive_data,59,2) = IntToHex(BCC,2) then ';
+          ConnectSerialNo := -1;
+          for i := 0 to ConnectCount + 1 do
           begin
-            sCommand := sCommand + AnsiChar(Chr(StrToInt('0x'+Copy(TempStr,(i*2)-1,2))));
-            if i <> 1 then  BCC := BCC xor StrToInt('0x'+Copy(TempStr,(i*2)-1,2));
+             errck :=  ' for i := 0 to ConnectCount + 1 do '+ i.ToString;
+            if SerialNo[i] = Copy(Receive_data,7,24) then
+            begin
+              errck :=  ' if SerialNo[i] = Copy(Receive_data,7,24) then '+ i.ToString;
+              ConnectSerialNo := i;
+              errck :=  ' ConnectSerialNo := i '+ i.ToString;
+              break;
+            end;
           end;
 
-
-          if Copy(Receive_data,59,2) = IntToHex(BCC,2) then
+          if ConnectSerialNo < 0 then
           begin
+            errck :=  ' if ConnectSerialNo < 0 then ';
+            ConnectSerialNo := ConnectCount;
+            SerialNo[ConnectCount] := Copy(Receive_data,7,24);
+            errck :=  ' SerialNo[ConnectCount] ';
+            ConnectCount := ConnectCount + 1;
+            errck :=  ' ConnectCount :=';
+          end;
 
-            ConnectSerialNo := -1;
-            for i := 0 to ConnectCount + 1 do
-            begin
-              if SerialNo[i] = Copy(Receive_data,7,24) then
+          // 251203 타이머 장비제어용으로 추가
+          if ConnectSerialNo >= 0 then
+          begin
+               SerialHandles[ConnectSerialNo] := Socket.Handle;
+          end;
+
+          if (SocketReadNumber < 0) or (SocketReadNumber > 100)  then
+          begin
+            errck :=  ' if (SocketReadNumber < 0) or (SocketReadNumber > 100)  then';
+            SocketReadNumber := 1;
+            errck :=  ' SocketReadNumber := 1;';
+          end;
+          SocketReadNumber := SocketReadNumber + 1;
+           errck :=  ' SocketReadNumber := SocketReadNumber + 1';
+          SocketReadNumber := SocketReadNumber mod 100;
+          errck :=  ' SocketReadNumber := SocketReadNumber mod 100 ';
+
+
+          var th : TThread;
+          th := TThread.CreateAnonymousThread(
+          procedure
+          begin
+            try
+              TThread.Synchronize(TThread.CurrentThread,
+              procedure
+              var
+                Temp, SetTemp : Currency;
+                ErrCheck : Integer;
+                DynFDQuery : TUniQuery;
+                NowTime: TTime; //현재시간  새벽3시 백업하면 db업뎃중지
               begin
-                ConnectSerialNo := i;
-                break;
-              end;
-            end;
-
-            if ConnectSerialNo < 0 then
-            begin
-              ConnectSerialNo := ConnectCount;
-              SerialNo[ConnectCount] := Copy(Receive_data,7,24);
-              ConnectCount := ConnectCount + 1;
-            end;
-
-
-            if (SocketReadNumber < 0) or (SocketReadNumber > 100)  then
-            begin
-              SocketReadNumber := 1;
-            end;
-            SocketReadNumber := SocketReadNumber + 1;
-            SocketReadNumber := SocketReadNumber mod 100;
-
-
-            var th : TThread;
-            th := TThread.CreateAnonymousThread(
-            procedure
-            begin
-              try
-                TThread.Synchronize(TThread.CurrentThread,
-                  procedure
-                  var
-                    Temp, SetTemp : Currency;
-                    ErrCheck : Integer;
-                    DynFDQuery : TUniQuery;
-                  begin
-                    DynFDQuery := TUniQuery.Create(nil);
-                    DynFDQuery.Connection := UniConnection1;
-                    try
-                      try
-                        ErrCheck := 0;
-                        if SerialCount[ConnectSerialNo] > 3 then //
-                        begin
-                          DynFDQuery.Close;
-                          DynFDQuery.SQL.Clear;
-
-                          DynFDQuery.SQL.Add('Exec usp_Temp @Option = ''D'', ');
-                          DynFDQuery.SQL.Add('@Temp = :Temp, @SetTemp = :SetTemp ');
-                          DynFDQuery.SQL.Add(', @PowerState = :PowerState');
-                          DynFDQuery.SQL.Add(', @DefrostMode = :DefrostMode');
-                          DynFDQuery.SQL.Add(', @DefrostState = :DefrostState');
-                          DynFDQuery.SQL.Add(', @Err = :Err');
-                          DynFDQuery.SQL.Add(', @DIn1 = :DIn1');
-                          DynFDQuery.SQL.Add(', @DIn2 = :DIn2');
-                          DynFDQuery.SQL.Add(', @DIn3 = :DIn3');
-                          DynFDQuery.SQL.Add(', @DIn4 = :DIn4');
-                          DynFDQuery.SQL.Add(', @DIn5 = :DIn5');
-                          DynFDQuery.SQL.Add(', @DOut1 = :DOut1');
-                          DynFDQuery.SQL.Add(', @DOut2 = :DOut2');
-                          DynFDQuery.SQL.Add(', @DOut3 = :DOut3');
-                          DynFDQuery.SQL.Add(', @DOut4 = :DOut4');
-                          DynFDQuery.SQL.Add(', @DOut5 = :DOut5');
-                          DynFDQuery.SQL.Add(', @SerialNo = :SerialNo');
-                          if 32768 < HexToInt(Copy(Receive_data,33,4)) then
-                          begin
-                            Temp := HexToInt(Copy(Receive_data,33,4)) - 65536;
-                          end else
-                          begin
-                            Temp := HexToInt(Copy(Receive_data,33,4));
-                          end;
-
-                          if 32768 < HexToInt(Copy(Receive_data,37,4)) then
-                          begin
-                            SetTemp := HexToInt(Copy(Receive_data,37,4)) - 65536;
-                          end else
-                          begin
-                            SetTemp := HexToInt(Copy(Receive_data,37,4));
-                          end;
-
-                          Temp := Temp / 10;
-                          SetTemp := SetTemp / 10;
-                          ErrCheck := 1;
-                          DynFDQuery.ParamByName('Temp').AsCurrency := Temp; //HexToInt(Copy(Receive_data,33,4)) / 10;
-                          DynFDQuery.ParamByName('SetTemp').AsCurrency := SetTemp; //HexToInt(Copy(Receive_data,37,4)) / 10;
-                          DynFDQuery.ParamByName('PowerState').AsBoolean := PowerState;
-                          DynFDQuery.ParamByName('DefrostMode').AsBoolean := DefrostMode;
-                          DynFDQuery.ParamByName('DefrostState').AsBoolean := DefrostState;
-                          DynFDQuery.ParamByName('Err').AsString := Err;
-                          DynFDQuery.ParamByName('DIn1').AsBoolean := DIn1;
-                          DynFDQuery.ParamByName('DIn2').AsBoolean := DIn2;
-                          DynFDQuery.ParamByName('DIn3').AsBoolean := DIn3;
-                          DynFDQuery.ParamByName('DIn4').AsBoolean := DIn4;
-                          DynFDQuery.ParamByName('DIn5').AsBoolean := DIn5;
-                          DynFDQuery.ParamByName('DOut1').AsBoolean := DOut1;
-                          DynFDQuery.ParamByName('DOut2').AsBoolean := DOut2;
-                          DynFDQuery.ParamByName('DOut3').AsBoolean := DOut3;
-                          DynFDQuery.ParamByName('DOut4').AsBoolean := DOut4;
-                          DynFDQuery.ParamByName('DOut5').AsBoolean := DOut5;
-                          DynFDQuery.ParamByName('SerialNo').AsString := Copy(Receive_data,7,24);
-                        end;
-
-
-                        ErrCheck := 2;
-                        if SerialCount[ConnectSerialNo] > 100 then // 20(1분) 에서 5분으로 변경
-                        begin
-  //                        if ( PreTemp[ConnectSerialNo] <> FormatFloat('0.##',HexToInt(Copy(Receive_data,33,4)) / 10) )
-  //                          or ( PreSet[ConnectSerialNo] <> FormatFloat('0.##',HexToInt(Copy(Receive_data,37,4)) / 10) ) then
-                          begin
-                            PreTemp[ConnectSerialNo] := FormatFloat('0.##',HexToInt(Copy(Receive_data,33,4)) / 10);
-                            PreSet[ConnectSerialNo] := FormatFloat('0.##',HexToInt(Copy(Receive_data,37,4)) / 10);
-                            ErrCheck := 3;
-                                DynFDQuery.SQL.Add('Exec usp_Temp @Option = ''E'', ');
-                                DynFDQuery.SQL.Add('@Temp = :Temp, @SetTemp = :SetTemp ');
-                                DynFDQuery.SQL.Add(', @PowerState = :PowerState');
-                                DynFDQuery.SQL.Add(', @DefrostMode = :DefrostMode');
-                                DynFDQuery.SQL.Add(', @DefrostState = :DefrostState');
-                                DynFDQuery.SQL.Add(', @Err = :Err');
-                                DynFDQuery.SQL.Add(', @DIn1 = :DIn1');
-                                DynFDQuery.SQL.Add(', @DIn2 = :DIn2');
-                                DynFDQuery.SQL.Add(', @DIn3 = :DIn3');
-                                DynFDQuery.SQL.Add(', @DIn4 = :DIn4');
-                                DynFDQuery.SQL.Add(', @DIn5 = :DIn5');
-                                DynFDQuery.SQL.Add(', @DOut1 = :DOut1');
-                                DynFDQuery.SQL.Add(', @DOut2 = :DOut2');
-                                DynFDQuery.SQL.Add(', @DOut3 = :DOut3');
-                                DynFDQuery.SQL.Add(', @DOut4 = :DOut4');
-                                DynFDQuery.SQL.Add(', @DOut5 = :DOut5');
-                                DynFDQuery.SQL.Add(', @SerialNo = :SerialNo');
-                                DynFDQuery.ParamByName('Temp').AsCurrency := Temp;// HexToInt(Copy(Receive_data,33,4)) / 10;
-                                DynFDQuery.ParamByName('SetTemp').AsCurrency := SetTemp; //HexToInt(Copy(Receive_data,37,4)) / 10;
-                                DynFDQuery.ParamByName('PowerState').AsBoolean := PowerState;
-                                DynFDQuery.ParamByName('DefrostMode').AsBoolean := DefrostMode;
-                                DynFDQuery.ParamByName('DefrostState').AsBoolean := DefrostState;
-                                DynFDQuery.ParamByName('Err').AsString := Err;
-                                DynFDQuery.ParamByName('DIn1').AsBoolean := DIn1;
-                                DynFDQuery.ParamByName('DIn2').AsBoolean := DIn2;
-                                DynFDQuery.ParamByName('DIn3').AsBoolean := DIn3;
-                                DynFDQuery.ParamByName('DIn4').AsBoolean := DIn4;
-                                DynFDQuery.ParamByName('DIn5').AsBoolean := DIn5;
-                                DynFDQuery.ParamByName('DOut1').AsBoolean := DOut1;
-                                DynFDQuery.ParamByName('DOut2').AsBoolean := DOut2;
-                                DynFDQuery.ParamByName('DOut3').AsBoolean := DOut3;
-                                DynFDQuery.ParamByName('DOut4').AsBoolean := DOut4;
-                                DynFDQuery.ParamByName('DOut5').AsBoolean := DOut5;
-                                DynFDQuery.ParamByName('SerialNo').AsString := Copy(Receive_data,7,24);
-
-
-                            SerialCount[ConnectSerialNo] := 0;
-                          end;
-                        end else
-                        begin
-                          SerialCount[ConnectSerialNo] := SerialCount[ConnectSerialNo] + 1;
-                        end;
-
-                        if DynFDQuery.SQL.Text <> '' then DynFDQuery.ExecSQL;
-
-                        LabelSocket.Caption := 'Socket : '+ConnectSerialNo.ToString;
-                      except on e:exception do
-                        begin
-                          Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) +
-                                    ConnectSerialNo.ToString + ' Thread Error : '+e.Message + ' Check : '+ErrCheck.ToString);
-                          if Pos(e.Message,'Out') > 0 then
-                          begin
-                            TimerLogSave.Enabled := True;
-                          end;
-                        end;
-                      end;
-                    finally
-                      DynFDQuery.Free;
+                NowTime := Time;
+                DynFDQuery := TUniQuery.Create(nil);
+                DynFDQuery.Connection := UniConnection1;
+                try
+                  try
+                    ErrCheck := 0;
+                    if 32768 < HexToInt(Copy(Receive_data,33,4)) then
+                    begin
+                      Temp := HexToInt(Copy(Receive_data,33,4)) - 65536;
+                    end else
+                    begin
+                      Temp := HexToInt(Copy(Receive_data,33,4));
                     end;
-                  end);
-              finally
-                LabelSocketNum.Caption := 'SocketNum : '+SocketReadNumber.ToString;
-              end;
-            end);
-            th.FreeOnTerminate := True;     //251014_김동휘 스레드 보완
-            th.Start;
 
+                    if 32768 < HexToInt(Copy(Receive_data,37,4)) then
+                    begin
+                      SetTemp := HexToInt(Copy(Receive_data,37,4)) - 65536;
+                    end else
+                    begin
+                      SetTemp := HexToInt(Copy(Receive_data,37,4));
+                    end;
+
+                    Temp := Temp / 10;
+                    SetTemp := SetTemp / 10;
+
+                    if not ((NowTime >= EncodeTime(3, 0, 0, 0)) and(NowTime <= EncodeTime(3, 20, 0, 0))) then
+                    begin
+                      if SerialCount[ConnectSerialNo] > 20 then //  1분
+                      begin
+                        DynFDQuery.Close;
+                        DynFDQuery.SQL.Clear;
+
+                        DynFDQuery.SQL.Add('Exec usp_Temp @Option = ''D'', ');
+                        DynFDQuery.SQL.Add('@Temp = :Temp, @SetTemp = :SetTemp ');
+                        DynFDQuery.SQL.Add(', @PowerState = :PowerState');
+                        DynFDQuery.SQL.Add(', @DefrostMode = :DefrostMode');
+                        DynFDQuery.SQL.Add(', @DefrostState = :DefrostState');
+                        DynFDQuery.SQL.Add(', @Err = :Err');
+                        DynFDQuery.SQL.Add(', @DIn1 = :DIn1');
+                        DynFDQuery.SQL.Add(', @DIn2 = :DIn2');
+                        DynFDQuery.SQL.Add(', @DIn3 = :DIn3');
+                        DynFDQuery.SQL.Add(', @DIn4 = :DIn4');
+                        DynFDQuery.SQL.Add(', @DIn5 = :DIn5');
+                        DynFDQuery.SQL.Add(', @DOut1 = :DOut1');
+                        DynFDQuery.SQL.Add(', @DOut2 = :DOut2');
+                        DynFDQuery.SQL.Add(', @DOut3 = :DOut3');
+                        DynFDQuery.SQL.Add(', @DOut4 = :DOut4');
+                        DynFDQuery.SQL.Add(', @DOut5 = :DOut5');
+                        DynFDQuery.SQL.Add(', @SerialNo = :SerialNo');
+
+                        ErrCheck := 1;
+                        DynFDQuery.ParamByName('Temp').AsCurrency := Temp; //HexToInt(Copy(Receive_data,33,4)) / 10;
+                        DynFDQuery.ParamByName('SetTemp').AsCurrency := SetTemp; //HexToInt(Copy(Receive_data,37,4)) / 10;
+                        DynFDQuery.ParamByName('PowerState').AsBoolean := PowerState;
+                        DynFDQuery.ParamByName('DefrostMode').AsBoolean := DefrostMode;
+                        DynFDQuery.ParamByName('DefrostState').AsBoolean := DefrostState;
+                        DynFDQuery.ParamByName('Err').AsString := Err;
+                        DynFDQuery.ParamByName('DIn1').AsBoolean := DIn1;
+                        DynFDQuery.ParamByName('DIn2').AsBoolean := DIn2;
+                        DynFDQuery.ParamByName('DIn3').AsBoolean := DIn3;
+                        DynFDQuery.ParamByName('DIn4').AsBoolean := DIn4;
+                        DynFDQuery.ParamByName('DIn5').AsBoolean := DIn5;
+                        DynFDQuery.ParamByName('DOut1').AsBoolean := DOut1;
+                        DynFDQuery.ParamByName('DOut2').AsBoolean := DOut2;
+                        DynFDQuery.ParamByName('DOut3').AsBoolean := DOut3;
+                        DynFDQuery.ParamByName('DOut4').AsBoolean := DOut4;
+                        DynFDQuery.ParamByName('DOut5').AsBoolean := DOut5;
+                        DynFDQuery.ParamByName('SerialNo').AsString := Copy(Receive_data,7,24);
+                      end;
+                    end;
+
+                    ErrCheck := 2;
+                    if SerialCount[ConnectSerialNo] > 100 then // 20(1분) 에서 5분으로 변경
+                    begin
+//                        if ( PreTemp[ConnectSerialNo] <> FormatFloat('0.##',HexToInt(Copy(Receive_data,33,4)) / 10) )
+//                          or ( PreSet[ConnectSerialNo] <> FormatFloat('0.##',HexToInt(Copy(Receive_data,37,4)) / 10) ) then
+                      begin
+                        PreTemp[ConnectSerialNo] := FormatFloat('0.##',HexToInt(Copy(Receive_data,33,4)) / 10);
+                        PreSet[ConnectSerialNo] := FormatFloat('0.##',HexToInt(Copy(Receive_data,37,4)) / 10);
+                        ErrCheck := 3;
+                        DynFDQuery.SQL.Add('Exec usp_Temp @Option = ''E'', ');
+                        DynFDQuery.SQL.Add('@Temp = :Temp, @SetTemp = :SetTemp ');
+                        DynFDQuery.SQL.Add(', @PowerState = :PowerState');
+                        DynFDQuery.SQL.Add(', @DefrostMode = :DefrostMode');
+                        DynFDQuery.SQL.Add(', @DefrostState = :DefrostState');
+                        DynFDQuery.SQL.Add(', @Err = :Err');
+                        DynFDQuery.SQL.Add(', @DIn1 = :DIn1');
+                        DynFDQuery.SQL.Add(', @DIn2 = :DIn2');
+                        DynFDQuery.SQL.Add(', @DIn3 = :DIn3');
+                        DynFDQuery.SQL.Add(', @DIn4 = :DIn4');
+                        DynFDQuery.SQL.Add(', @DIn5 = :DIn5');
+                        DynFDQuery.SQL.Add(', @DOut1 = :DOut1');
+                        DynFDQuery.SQL.Add(', @DOut2 = :DOut2');
+                        DynFDQuery.SQL.Add(', @DOut3 = :DOut3');
+                        DynFDQuery.SQL.Add(', @DOut4 = :DOut4');
+                        DynFDQuery.SQL.Add(', @DOut5 = :DOut5');
+                        DynFDQuery.SQL.Add(', @SerialNo = :SerialNo');
+                        DynFDQuery.ParamByName('Temp').AsCurrency := Temp;// HexToInt(Copy(Receive_data,33,4)) / 10;
+                        DynFDQuery.ParamByName('SetTemp').AsCurrency := SetTemp; //HexToInt(Copy(Receive_data,37,4)) / 10;
+                        DynFDQuery.ParamByName('PowerState').AsBoolean := PowerState;
+                        DynFDQuery.ParamByName('DefrostMode').AsBoolean := DefrostMode;
+                        DynFDQuery.ParamByName('DefrostState').AsBoolean := DefrostState;
+                        DynFDQuery.ParamByName('Err').AsString := Err;
+                        DynFDQuery.ParamByName('DIn1').AsBoolean := DIn1;
+                        DynFDQuery.ParamByName('DIn2').AsBoolean := DIn2;
+                        DynFDQuery.ParamByName('DIn3').AsBoolean := DIn3;
+                        DynFDQuery.ParamByName('DIn4').AsBoolean := DIn4;
+                        DynFDQuery.ParamByName('DIn5').AsBoolean := DIn5;
+                        DynFDQuery.ParamByName('DOut1').AsBoolean := DOut1;
+                        DynFDQuery.ParamByName('DOut2').AsBoolean := DOut2;
+                        DynFDQuery.ParamByName('DOut3').AsBoolean := DOut3;
+                        DynFDQuery.ParamByName('DOut4').AsBoolean := DOut4;
+                        DynFDQuery.ParamByName('DOut5').AsBoolean := DOut5;
+                        DynFDQuery.ParamByName('SerialNo').AsString := Copy(Receive_data,7,24);
+
+
+                        SerialCount[ConnectSerialNo] := 0;
+                      end;
+                    end else
+                    begin
+                      SerialCount[ConnectSerialNo] := SerialCount[ConnectSerialNo] + 1;
+                    end;
+                    if DynFDQuery.SQL.Text <> '' then DynFDQuery.ExecSQL;
+
+                   // LabelSocket.Caption := 'Socket : '+ConnectSerialNo.ToString;
+
+                  except
+//                        on E: EAccessViolation do
+//                        begin
+//                          Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) +
+//                                    ConnectSerialNo.ToString + ' Thread Error : '+e.Message + ' Check : '+ErrCheck.ToString);
+//                          TimerLogSave.Enabled := True;
+//                        end;
+                    on e:exception do
+                    begin
+                      Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) +
+                                ConnectSerialNo.ToString + ' Thread Error : '+e.Message + ' Check : '+ErrCheck.ToString);
+//                          if Pos(e.Message,'Out') > 0 then
+//                          begin
+//                            TimerLogSave.Enabled := True;
+//                          end;
+                    end;
+                  end;
+                finally
+                  DynFDQuery.Free;
+                end;
+              end);
+            finally
+              //LabelSocketNum.Caption := 'SocketNum : '+SocketReadNumber.ToString;
+            end;
+          end);
+          th.FreeOnTerminate := True;
+          th.Start;
+
+          if MilliSecondsBetween(Now, FLastLabelUpdate) > 1000 then
+          begin
+            LabelSocket.Caption := 'Socket : ' + ConnectSerialNo.ToString;
+            LabelSocketNum.Caption := 'SocketNum : ' + SocketReadNumber.ToString;
+            FLastLabelUpdate := Now;
+          end;
+
+          if Assigned(Socket) and Socket.Connected then
             Socket.SendText(AnsiChar(#$02)+AnsiChar(#$01)+AnsiChar(#$10)+AnsiChar(#$03)+AnsiChar(#$12));
 
-            if IOTCommand[ConnectSerialNo] then
-            begin
+          errck :=  ' if Assigned(Socket) and Socket.Connected then ';
+
+         { if IOTCommand[ConnectSerialNo] then
+          begin
+             errck :=  ' IOTCommand[ConnectSerialNo] ';
 //              Memo1.Lines.Add(Trim(IOTSerialNo));
-              if Copy(Receive_data,7,24) = Trim(IOTSerialNo) then
+            if Copy(Receive_data,7,24) = Trim(IOTSerialNo) then
+            begin
+              errck :=  ' if Copy(Receive_data,7,24) = Trim(IOTSerialNo) then ';
+              if (Copy(EditHex[ConnectSerialNo],1,4) = 'FFFF') and (Length(EditHex[ConnectSerialNo]) >= 8)  then
               begin
-                if (Copy(EditHex[ConnectSerialNo],1,4) = 'FFFF') and (Length(EditHex[ConnectSerialNo]) >= 8)  then
-                begin
-                  EditHex[ConnectSerialNo] := Copy(EditHex[ConnectSerialNo],5,4);
-                end;
+                 errck :=  ' if (Copy(EditHex[ConnectSerialNo],1,4) = FFFF) and (Length(EditHex[ConnectSerialNo]) >= 8)  then ';
+                EditHex[ConnectSerialNo] := Copy(EditHex[ConnectSerialNo],5,4);
+                errck :=  ' EditHex[ConnectSerialNo] := Copy(EditHex[ConnectSerialNo],5,4);_'+ ConnectSerialNo.ToString;
+              end;
 
-                IOTCommand[ConnectSerialNo] := False;
-                sCommand :=  AnsiChar(#$04) + AnsiChar(#$20)
-                            + AnsiChar(Chr(StrToInt('0x0'+EditOnOff[ConnectSerialNo])))  // OnOff
-                            + AnsiChar(Chr(StrToInt('0x'+Copy(EditHex[ConnectSerialNo],1,2))))  // 설정온도 앞2
-                            + AnsiChar(Chr(StrToInt('0x'+Copy(EditHex[ConnectSerialNo],3,2))))  // 설정온도 뒤2
-                            + AnsiChar(#$03);
+              IOTCommand[ConnectSerialNo] := False;
+              errck :=  ' IOTCommand[ConnectSerialNo] := False;';
+              sCommand :=  AnsiChar(#$04) + AnsiChar(#$20)
+                          + AnsiChar(Chr(StrToInt('0x0'+EditOnOff[ConnectSerialNo])))  // OnOff
+                          + AnsiChar(Chr(StrToInt('0x'+Copy(EditHex[ConnectSerialNo],1,2))))  // 설정온도 앞2
+                          + AnsiChar(Chr(StrToInt('0x'+Copy(EditHex[ConnectSerialNo],3,2))))  // 설정온도 뒤2
+                          + AnsiChar(#$03);
+              errck :=  ' sCommand :=  AnsiChar(#$04) + AnsiChar(#$20)';
 
-                BCC := StrToInt('0x04');
-                BCC := BCC xor StrToInt('0x20');
-                BCC := BCC xor StrToInt('0x0'+EditOnOff[ConnectSerialNo]);
-                BCC := BCC xor StrToInt('0x'+Copy(EditHex[ConnectSerialNo],1,2));
-                BCC := BCC xor StrToInt('0x'+Copy(EditHex[ConnectSerialNo],3,2));
-                BCC := BCC xor StrToInt('0x03');
-                                                                  {
-                Memo1.Lines.Add('IOTCommand : 0x02 0x04 0x20 0x0'+EditOnOff[ConnectSerialNo]
-                      +' 0x'+Copy(EditHex[ConnectSerialNo],1,2)+' 0x'+Copy(EditHex[ConnectSerialNo],3,2)
-                      +' 0x03 0x'+IntToHex(BCC,2));               }
+              BCC := StrToInt('0x04');
+              errck :=  '  BCC := StrToInt(0x04);';
+              BCC := BCC xor StrToInt('0x20');
+              BCC := BCC xor StrToInt('0x0'+EditOnOff[ConnectSerialNo]);
+              BCC := BCC xor StrToInt('0x'+Copy(EditHex[ConnectSerialNo],1,2));
+              BCC := BCC xor StrToInt('0x'+Copy(EditHex[ConnectSerialNo],3,2));
+              BCC := BCC xor StrToInt('0x03');
 
-                sCommand := AnsiChar(#$02) + sCommand + AnsiChar(Chr(StrToInt('0x'+IntToHex(BCC,2)))); // Chr(BccCalculator(sCommand,1));
+              sCommand := AnsiChar(#$02) + sCommand + AnsiChar(Chr(StrToInt('0x'+IntToHex(BCC,2)))); // Chr(BccCalculator(sCommand,1));
+              errck :=  '  sCommand := AnsiChar(#$02) + sCommand + AnsiChar(Chr(StrToInt(0x+IntToHex(BCC,2)))); ';
+              if Assigned(Socket) and Socket.Connected then
                 Socket.SendText(sCommand);
 
-                FDQueryIOT.Close;
-                FDQueryIOT.SQL.Clear;
-                FDQueryIOT.SQL.Add('Delete from IOT Where No = '+IOTNo[ConnectSerialNo]);
-                FDQueryIOT.ExecSQL;
-                IOTNo[ConnectSerialNo] := '0';
-              end;
+                 errck :=  ' Socket.SendText(sCommand); ';
+
+              FDQueryIOT.Close;
+              errck :=  ' FDQueryIOT.Close; ';
+              FDQueryIOT.SQL.Clear;
+              FDQueryIOT.SQL.Add('Delete from IOT Where No = '+IOTNo[ConnectSerialNo]);
+              FDQueryIOT.ExecSQL;
+              errck :=  ' FDQueryIOT.ExecSQL; ';
+              IOTNo[ConnectSerialNo] := '0';
+              errck :=  ' IOTNo[ConnectSerialNo] := 0; ' + ConnectSerialNo.ToString;
             end;
-         end else
-         begin
-           //Memo1.Lines.Add('BCC Not Equal');
-         end;
-      end else
+          end;    }
+        end;
+//        else
+//        begin
+//        //Memo1.Lines.Add('BCC Not Equal');
+//        end;
+      end
+      else
       begin
         Memo1.Lines.Add(Socket.RemoteAddress + FormatDateTime('[]yyyy-mm-dd hh:nn:ss ',Now) + Receive_data);
       end;
-      //Memo1.Lines.Add(Socket.RemoteAddress + ' = Send : 0x02 0x01 0x10 0x03 0x12'
-//          + '  '+SerialCount[ConnectSerialNo].ToString + '  ' + SerialNo[ConnectSerialNo]);
     end;
   except on e:Exception do
     Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) + e.Message);
@@ -804,89 +914,11 @@ begin
   end;
   TimerError2.Enabled := True;
 end;
-
+  {
 procedure TfDongHwaServer.TimerIOTTimer(Sender: TObject);
 var
   IOTTemp : Double;
-  // 스레드 사용
-  procedure Wait(Number: Integer; Proc: TProc);
-  var
-    Thread: array[0..100] of TThread;
-  begin
-    if PGCloseFlag then Exit;
-
-    Thread[Number] := TThread.CreateAnonymousThread(
-      procedure()
-      begin
-        Proc;
-      end);
-    Thread[Number].FreeOnTerminate := True;
-    Thread[Number].Start;
-
-    while not Thread[Number].Finished do Application.ProcessMessages;
-  end;
-begin                {
-  // 스레드로 전송
-  IOTTimerNumber := IOTTimerNumber + 1;
-  IOTTimerNumber := (IOTTimerNumber mod 100);
-  Wait(IOTTimerNumber,procedure()
-        var
-          i : Integer;
-          IOTNoStr : String;
-        begin
-          try
-            FDQueryIOT.Close;
-            FDQueryIOT.SQL.Clear;
-
-            FDQueryIOT.SQL.Add('Exec usp_Temp @Option = ''F''');
-            FDQueryIOT.Open;
-
-            //Memo1.Lines.Add('IOT Thread OK ');
-
-            if FDQueryIOT.RecordCount > 0 then
-            begin
-                                        // 1분
-              IOTNoStr := FDQueryIOT.FieldByName('No').AsString;
-              if (Now - (0.0000011574 * 600)) > FDQueryIOT.FieldByName('InTime').AsDateTime  then
-              begin
-                //Memo1.Lines.Add('Time Out IOT Delete ' + FDQueryIOT.FieldByName('SerialNo').AsString);
-                FDQueryIOT.Close;
-                FDQueryIOT.SQL.Clear;
-                FDQueryIOT.SQL.Add('Delete from IOT Where No = '+IOTNoStr);
-                FDQueryIOT.ExecSQL;
-              end else
-              begin
-                IOTSerialNo := FDQueryIOT.FieldByName('SerialNo').AsString;
-                for i := 0 to ConnectCount + 1 do
-                begin
-                  if SerialNo[i] = IOTSerialNo then
-                  begin
-                    IOTCommand[i] := True;
-                    IOTNo[i] := FDQueryIOT.FieldByName('No').AsString;
-                    IOTTemp := FDQueryIOT.FieldByName('SetTemp').AsFloat;
-                    EditFloat[i] := FormatFloat('0',Round(IOTTemp * 10));
-                    EditHex[i] := IntToHex(StrToIntDef(EditFloat[i],0),4);
-  //                  //Memo1.Lines.Add('EditFloat : '+EditFloat[i]+' EditHex : '+EditHex[i] );
-                    if FDQueryIOT.FieldByName('PowerState').AsBoolean then
-                    begin
-                      EditOnOff[i] := '1';
-                    end else
-                    begin
-                      EditOnOff[i] := '0';
-                    end;
-                    break;
-                  end;
-                end;
-              end;
-            end;
-            LabelIOT.Caption := 'IOT : '+IOTTimerNumber.ToString;
-          except on e:exception do
-            begin
-              Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) + ' IOT Thread Error : '+e.Message);
-            end;
-          end;
-        end);
-}
+begin
   TThread.CreateAnonymousThread(
     procedure
     begin
@@ -895,9 +927,10 @@ begin                {
           procedure
           var
             i : Integer;
-            IOTNoStr : String;
+            IOTNoStr, errcheck_TimerIOTTimer  : String;
           begin
             try
+              errcheck_TimerIOTTimer := 'first ';
               FDQueryIOT.Close;
               FDQueryIOT.SQL.Clear;
 
@@ -908,6 +941,7 @@ begin                {
 
               if FDQueryIOT.RecordCount > 0 then
               begin
+                errcheck_TimerIOTTimer := 'IOTNoStr ';
                                           // 1분
                 IOTNoStr := FDQueryIOT.FieldByName('No').AsString;
                 if (Now - (0.0000011574 * 600)) > FDQueryIOT.FieldByName('InTime').AsDateTime  then
@@ -917,18 +951,28 @@ begin                {
                   FDQueryIOT.SQL.Clear;
                   FDQueryIOT.SQL.Add('Delete from IOT Where No = '+IOTNoStr);
                   FDQueryIOT.ExecSQL;
-                end else
+                  errcheck_TimerIOTTimer := 'IOT_Delete : No = '+ IOTNoStr;
+                end
+                else
                 begin
                   IOTSerialNo := FDQueryIOT.FieldByName('SerialNo').AsString;
+                  errcheck_TimerIOTTimer := 'IOTSerialNo = '+ IOTSerialNo;
                   for i := 0 to ConnectCount + 1 do
                   begin
+                    errcheck_TimerIOTTimer := 'for[i]= '+i.ToString;
                     if SerialNo[i] = IOTSerialNo then
                     begin
+                      errcheck_TimerIOTTimer := 'SerialNo[i] = IOTSerialNo = '+i.ToString;
                       IOTCommand[i] := True;
+                      errcheck_TimerIOTTimer := 'IOTCommand[i] := True = '+i.ToString;
                       IOTNo[i] := FDQueryIOT.FieldByName('No').AsString;
+                      errcheck_TimerIOTTimer := 'IOTNo[i]= '+i.ToString;
                       IOTTemp := FDQueryIOT.FieldByName('SetTemp').AsFloat;
+                      errcheck_TimerIOTTimer := 'IOTTemp= '+i.ToString;
                       EditFloat[i] := FormatFloat('0',Round(IOTTemp * 10));
+                      errcheck_TimerIOTTimer := 'EditFloat[i]= '+i.ToString;
                       EditHex[i] := IntToHex(StrToIntDef(EditFloat[i],0),4);
+                      errcheck_TimerIOTTimer := 'EditHex[i]= '+i.ToString;
     //                  //Memo1.Lines.Add('EditFloat : '+EditFloat[i]+' EditHex : '+EditHex[i] );
                       if FDQueryIOT.FieldByName('PowerState').AsBoolean then
                       begin
@@ -941,6 +985,7 @@ begin                {
                       begin
                         EditOnOff[i] := '3';
                       end;
+                      errcheck_TimerIOTTimer := 'EditOnOff[i]= '+i.ToString;
                       break;
                     end;
                   end;
@@ -949,10 +994,9 @@ begin                {
               LabelIOT.Caption := 'IOT : '+IOTTimerNumber.ToString;
             except on e:exception do
               begin
-                Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) + ' IOT Thread Error : '+e.Message);
+                Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) + ' IOT Thread Error : '+e.Message +#10#13 +'--errlocate: '+ errcheck_TimerIOTTimer);
               end;
             end;
-
 
           end);
       finally
@@ -961,6 +1005,168 @@ begin                {
       end;
     end).Start();
 end;
+ }
+
+procedure TfDongHwaServer.TimerIOTTimer(Sender: TObject);
+var
+  IOTTemp: Double;
+begin
+  TThread.CreateAnonymousThread(
+    procedure
+    begin
+      try
+        TThread.Synchronize(TThread.CurrentThread,
+          procedure
+          var
+            i, k        : Integer;
+            DeviceIndex : Integer;
+            SocketIndex : Integer;
+            IOTNoStr    : String;
+            TargetHandle: THandle;
+
+            TargetTemp  : Double;
+            sHexTemp, sOnOffVal, sT1, sT2: String;
+            sCmdBody, FullPacket: AnsiString;
+            BCC_Calc: Integer;
+          begin
+            DeviceIndex  := -1;
+            SocketIndex  := -1;
+            TargetHandle := 0;
+
+            try
+              // 1. IOT 명령 조회
+              FDQueryIOT.Close;
+              FDQueryIOT.SQL.Clear;
+              FDQueryIOT.SQL.Add('Exec usp_Temp @Option = ''F''');
+              FDQueryIOT.Open;
+
+              if FDQueryIOT.RecordCount > 0 then
+              begin
+                IOTNoStr    := FDQueryIOT.FieldByName('No').AsString;
+
+                // 2. 타임아웃이면 삭제
+                if (Now - (0.0000011574 * 600)) > FDQueryIOT.FieldByName('InTime').AsDateTime then
+                begin
+                  FDQueryIOTDelete.Close;
+                  FDQueryIOTDelete.SQL.Clear;
+                  FDQueryIOTDelete.SQL.Add('Delete from IOT Where No = ' + IOTNoStr);
+                  FDQueryIOTDelete.ExecSQL;
+                end
+                else
+                begin
+                  // 3. 대상 시리얼
+                  IOTSerialNo := FDQueryIOT.FieldByName('SerialNo').AsString;
+
+                  // [A] SerialNo 배열에서 Index / Handle 찾기
+                  for i := 0 to ConnectCount do
+                  begin
+                    if i > High(SerialNo) then Break;
+                    if SerialNo[i] = IOTSerialNo then
+                    begin
+                      DeviceIndex  := i;
+                      TargetHandle := SerialHandles[i];
+                      Break;
+                    end;
+                  end;
+
+                  if (DeviceIndex < 0) or (TargetHandle = 0) then
+                  begin
+                    Memo2.Lines.Add('Target Not Found: ' + IOTSerialNo);
+                    Exit;
+                  end;
+
+                  // [B] 패킷 조립
+                  TargetTemp := FDQueryIOT.FieldByName('SetTemp').AsFloat;
+                  sHexTemp   := IntToHex(StrToIntDef(FormatFloat('0', Round(TargetTemp * 10)), 0), 4);
+                  if (Length(sHexTemp) >= 8) and (Copy(sHexTemp, 1, 4) = 'FFFF') then
+                    sHexTemp := Copy(sHexTemp, 5, 4);
+
+                  if FDQueryIOT.FieldByName('Defrost').AsBoolean then
+                    sOnOffVal := '3'
+                  else if FDQueryIOT.FieldByName('PowerState').AsBoolean then
+                    sOnOffVal := '1'
+                  else
+                    sOnOffVal := '0';
+
+                  sT1 := Copy(sHexTemp, 1, 2);
+                  sT2 := Copy(sHexTemp, 3, 2);
+
+                  sCmdBody :=
+                    AnsiChar(#$04) + AnsiChar(#$20) +
+                    AnsiChar(Chr(StrToInt('0x0' + sOnOffVal))) +
+                    AnsiChar(Chr(StrToInt('0x' + sT1))) +
+                    AnsiChar(Chr(StrToInt('0x' + sT2))) +
+                    AnsiChar(#$03);
+
+                  BCC_Calc :=
+                    StrToInt('0x04') xor StrToInt('0x20') xor
+                    StrToInt('0x0' + sOnOffVal) xor
+                    StrToInt('0x' + sT1)        xor
+                    StrToInt('0x' + sT2)        xor
+                    StrToInt('0x03');
+
+                  FullPacket := AnsiChar(#$02) + sCmdBody + AnsiChar(Chr(BCC_Calc));
+
+                  // [C] Handle 매칭되는 실제 소켓 찾기
+                  for k := 0 to ServerSocket1.Socket.ActiveConnections - 1 do
+                  begin
+                    if ServerSocket1.Socket.Connections[k].Handle = TargetHandle then
+                    begin
+                      SocketIndex := k;
+                      Break;
+                    end;
+                  end;
+
+                  if SocketIndex < 0 then
+                  begin
+                    Memo2.Lines.Add('Socket Not Found for: ' + IOTSerialNo);
+                    Exit;
+                  end;
+
+                  // [D] 전송 시도
+                  try
+                    ServerSocket1.Socket.Connections[SocketIndex].SendText(FullPacket);
+                    LogAdd('IOT Control Sent(Handle): ' + IOTSerialNo);
+
+                    // 성공 시 명령 삭제
+                    FDQueryIOTDelete.Close;
+                    FDQueryIOTDelete.SQL.Clear;
+                    FDQueryIOTDelete.SQL.Add('Delete from IOT Where No = ' + IOTNoStr);
+                    FDQueryIOTDelete.ExecSQL;
+                  except
+                    on E: ESocketError do
+                    begin
+                      // 10053 같은 소켓 에러면 세션 정리
+                      if Pos('10053', E.Message) > 0 then
+                      begin
+                        ClearSocketData(DeviceIndex);
+                        try
+                          ServerSocket1.Socket.Connections[SocketIndex].Close;
+                        except
+                        end;
+                        Exit;
+                      end;
+                      Memo2.Lines.Add('IOT Send Error: ' + E.Message);
+                    end;
+                    on E: Exception do
+                      Memo2.Lines.Add('IOT Send Error: ' + E.Message);
+                  end;
+                end;
+              end;
+
+              LabelIOT.Caption := 'IOT : ' + IOTTimerNumber.ToString;
+            except
+              on E: Exception do
+                Memo2.Lines.Add(FormatDateTime('yyyy-mm-dd hh:nn:ss ',Now) +
+                                ' IOT Thread Error : ' + E.Message);
+            end;
+          end);
+      finally
+        IOTTimerNumber := (IOTTimerNumber + 1) mod 100;
+      end;
+    end).Start();
+end;
+
 
 procedure TfDongHwaServer.TimerKillProgramTimer(Sender: TObject);
 begin
