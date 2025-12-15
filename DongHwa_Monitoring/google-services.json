@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "845615883915",
+    "project_id": "donghwa-55b24",
+    "storage_bucket": "donghwa-55b24.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:845615883915:android:e329e3b4f481bbfe1cd68e",
+        "android_client_info": {
+          "package_name": "com.COCOS.DongHwa"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "845615883915-7c8u48bq79t9pk8itg2filj1teh2ul5m.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBsxdoZYTgkDWsq-NhTVtixsxjaMC1Z6Wk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "845615883915-7c8u48bq79t9pk8itg2filj1teh2ul5m.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

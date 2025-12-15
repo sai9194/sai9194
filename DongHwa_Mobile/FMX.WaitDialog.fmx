@@ -1,0 +1,52 @@
+object WaitDialog: TWaitDialog
+  Size.Width = 354.000000000000000000
+  Size.Height = 460.000000000000000000
+  Size.PlatformDefault = False
+  object rctBackground: TRectangle
+    Align = Client
+    Fill.Color = claGray
+    Opacity = 0.800000011920929000
+    Size.Width = 354.000000000000000000
+    Size.Height = 460.000000000000000000
+    Size.PlatformDefault = False
+  end
+  object lytMessage: TLayout
+    Align = Center
+    Size.Width = 299.000000000000000000
+    Size.Height = 126.000000000000000000
+    Size.PlatformDefault = False
+    TabOrder = 0
+    object rctMessageBG: TRectangle
+      Align = Client
+      Fill.Color = claWhite
+      Size.Width = 299.000000000000000000
+      Size.Height = 126.000000000000000000
+      Size.PlatformDefault = False
+      Stroke.Kind = None
+      XRadius = 5.000000000000000000
+      YRadius = 5.000000000000000000
+      OnClick = rctMessageBGClick
+    end
+    object lblMessage: TLabel
+      Anchors = [akLeft, akTop, akRight]
+      Position.X = 88.000000000000000000
+      Position.Y = 32.000000000000000000
+      Size.Width = 201.000000000000000000
+      Size.Height = 65.000000000000000000
+      Size.PlatformDefault = False
+      Text = 'Please wait.'
+      TabOrder = 2
+    end
+    object AniIndicator1: TAniIndicator
+      Enabled = True
+      Position.X = 24.000000000000000000
+      Position.Y = 40.000000000000000000
+    end
+  end
+  object Timer: TTimer
+    Enabled = False
+    OnTimer = TimerTimer
+    Left = 192
+    Top = 352
+  end
+end

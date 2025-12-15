@@ -1,0 +1,36 @@
+object fPROGRESSBAR: TfPROGRESSBAR
+  Left = 0
+  Top = 0
+  BorderIcons = []
+  BorderStyle = bsNone
+  Caption = 'fPROGRESSBAR'
+  ClientHeight = 33
+  ClientWidth = 500
+  Color = clBtnFace
+  Font.Charset = DEFAULT_CHARSET
+  Font.Color = clWindowText
+  Font.Height = -11
+  Font.Name = 'Tahoma'
+  Font.Style = []
+  FormStyle = fsStayOnTop
+  PopupMode = pmAuto
+  Position = poMainFormCenter
+  OnClose = FormClose
+  TextHeight = 13
+  object cxProgressBar1: TcxProgressBar
+    Left = 0
+    Top = 0
+    Align = alClient
+    Properties.PeakValue = 40.000000000000000000
+    Style.LookAndFeel.NativeStyle = False
+    Style.LookAndFeel.SkinName = 'Foggy'
+    StyleDisabled.LookAndFeel.NativeStyle = False
+    StyleDisabled.LookAndFeel.SkinName = 'Foggy'
+    StyleFocused.LookAndFeel.NativeStyle = False
+    StyleFocused.LookAndFeel.SkinName = 'Foggy'
+    StyleHot.LookAndFeel.NativeStyle = False
+    StyleHot.LookAndFeel.SkinName = 'Foggy'
+    TabOrder = 0
+    Width = 500
+  end
+end
