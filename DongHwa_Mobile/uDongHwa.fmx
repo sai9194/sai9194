@@ -349,7 +349,7 @@ object fDongHwa: TfDongHwa
     Size.Height = 831.000000000000000000
     Size.PlatformDefault = False
     TabHeight = 49.000000000000000000
-    TabIndex = 2
+    TabIndex = 7
     TabOrder = 0
     TabPosition = PlatformDefault
     OnChange = TabControl1Change
@@ -1459,7 +1459,7 @@ object fDongHwa: TfDongHwa
       CustomIcon = <
         item
         end>
-      IsSelected = True
+      IsSelected = False
       Size.Width = 50.000000000000000000
       Size.Height = 49.000000000000000000
       Size.PlatformDefault = False
@@ -61487,7 +61487,7 @@ object fDongHwa: TfDongHwa
       CustomIcon = <
         item
         end>
-      IsSelected = False
+      IsSelected = True
       Size.Width = 50.000000000000000000
       Size.Height = 49.000000000000000000
       Size.PlatformDefault = False
@@ -61664,7 +61664,6 @@ object fDongHwa: TfDongHwa
           Size.Width = 502.000000000000000000
           Size.Height = 91.000000000000000000
           Size.PlatformDefault = False
-          Visible = False
           TabOrder = 4
           object Rectangle1: TRectangle
             Tag = 2
